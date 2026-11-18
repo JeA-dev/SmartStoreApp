@@ -17,7 +17,7 @@ from api.images import ImageApi
 from api.products import ProductApi
 from services import detail_page
 from services.automation import runner
-from services.automation.config import AutomationSettings, load_settings
+from services.automation.config import AutomationSettings, load_mappings, load_settings
 from services.automation.input_sheet import read_items
 from services.automation.pipeline import PreparedItem, build_context, item_image_options, prepare
 from services.images import MAX_PRODUCT_IMAGES, SOURCE_EXTENSIONS
@@ -72,6 +72,45 @@ def available_templates(settings: AutomationSettings) -> list[str]:
     return ([detail_page.DEFAULT_TEMPLATE] if detail_page.DEFAULT_TEMPLATE in names else []) + rest
 
 
+DELETED_TEMPLATE_DIR = "삭제한_템플릿"
+
+
+@dataclass
+class TemplateInfo:
+    name: str
+    user_file: Path | None      # 상세템플릿 폴더의 파일 (없으면 앱 내장 템플릿)
+    builtin: bool               # 같은 이름의 앱 내장 템플릿이 있는지
+
+    @property
+    def deletable(self) -> bool:
+        return self.user_file is not None
+
+
+def template_info(settings: AutomationSettings, name: str) -> TemplateInfo:
+    user = Path(detail_page.user_template_dir(settings)) / f"{name}.html"
+    builtin = Path(detail_page.builtin_template_dir()) / f"{name}.html"
+    return TemplateInfo(name, user if user.is_file() else None, builtin.is_file())
+
+
+def mappings_using_template(db, name: str) -> list[str]:
+    """이 템플릿을 '상세 템플릿'으로 지정한 분류 이름들."""
+    return [m.name for m in load_mappings(db).values() if (m.detail_template or "").strip() == name]
+
+
+def delete_user_template(settings: AutomationSettings, name: str) -> Path:
+    """상세템플릿 폴더의 템플릿 파일을 '삭제한_템플릿' 폴더로 옮긴다 (완전히 지우지 않아 되살릴 수 있음).
+    앱 내장 템플릿은 지울 수 없다. 같은 이름의 내장 템플릿이 있으면 이후 그 내장 템플릿이 쓰인다."""
+    info = template_info(settings, name)
+    if not info.deletable:
+        raise StoreEditError(f"'{name}'은(는) 앱에 들어 있는 기본 템플릿이라 지울 수 없습니다.")
+    target_dir = info.user_file.parent / DELETED_TEMPLATE_DIR
+    target_dir.mkdir(exist_ok=True)
+    target = target_dir / f"{name}_{_stamp()}.html"
+    info.user_file.replace(target)
+    log.info("상세 템플릿 삭제: %s → %s", info.user_file.name, target)
+    return target
+
+
 @dataclass
 class DetailSource:
     """상세페이지를 다시 만드는 데 필요한 것 — 작업 엑셀 행 + 사진 폴더 + 스토어의 현재 상품명·가격."""
@@ -124,13 +163,17 @@ def _check_template(source: DetailSource, template: str) -> None:
                              f"파일명에 detail이 들어간 사진을 '{images.folder if images else '사진 폴더'}'에 넣으세요.")
 
 
-def render_detail(source: DetailSource, template: str, image_src) -> str:
+def render_detail(source: DetailSource, template: str, image_src, image_urls=detail_page.local_urls) -> str:
+    """image_src: 상품 사진 주소, image_urls: 템플릿에 직접 넣은 사진 주소 (기본은 PC 파일 — 미리보기용)."""
     _check_template(source, template)
     p = source.prepared
     settings = source.settings
     context = detail_page.build_context(p.draft, p.item, p.images, p.measurements, image_src,
                                         detail_page.notice_image_path(settings), detail_page.notice_text(settings))
-    return detail_page.render(settings, template, context)
+    try:
+        return detail_page.render(settings, template, context, image_urls=image_urls)
+    except detail_page.TemplateImageError as e:
+        raise StoreEditError(str(e)) from e
 
 
 def preview_detail(source: DetailSource, template: str) -> Path:
@@ -141,7 +184,11 @@ def preview_detail(source: DetailSource, template: str) -> Path:
 
 def apply_detail(services, origin_product_no: int, source: DetailSource, template: str) -> dict:
     """사진을 올리고 고른 템플릿으로 상세페이지를 만들어 스토어 상품의 상세설명만 바꾼다. 새로 조회한 원상품을 돌려준다."""
-    _check_template(source, template)
+    # 올리기 전에 확인: 템플릿 사진 파일, 스토어가 지우는 <style>·<script> (지워지면 디자인 없이 글자만 보임)
+    try:
+        detail_page.check_for_store(render_detail(source, template, detail_page.local_src), template)
+    except detail_page.TemplateStyleError as e:
+        raise StoreEditError(str(e)) from e
     api = ProductApi(services.client())
     raw = api.get_origin_product(origin_product_no)
     old = (raw.get("originProduct") or {}).get("detailContent") or ""
@@ -149,9 +196,11 @@ def apply_detail(services, origin_product_no: int, source: DetailSource, templat
     backup.write_text(old, encoding="utf-8")
 
     notice = detail_page.notice_image_path(source.settings)
+    image_api = ImageApi(services.client())
     to_upload = [str(x) for x in detail_page.page_images(source.prepared.images, notice)]
-    uploaded = dict(zip(to_upload, ImageApi(services.client()).upload(to_upload))) if to_upload else {}
-    html = render_detail(source, template, lambda path: uploaded[str(path)])
+    uploaded = dict(zip(to_upload, image_api.upload(to_upload))) if to_upload else {}
+    # 템플릿에 직접 넣은 사진(템플릿 폴더 기준, 예: images/모델컷.jpg)도 올려서 네이버 주소로 바꾼다
+    html = render_detail(source, template, lambda path: uploaded[str(path)], image_api.upload)
 
     body = copy.deepcopy(raw)
     body["originProduct"]["detailContent"] = html

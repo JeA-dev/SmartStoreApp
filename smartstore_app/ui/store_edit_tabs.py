@@ -16,9 +16,11 @@ from PySide6.QtWidgets import (
 
 from services.images import MAX_PRODUCT_IMAGES, SOURCE_EXTENSIONS
 from services.store_edit import (
-    DetailSource, PhotoEntry, StoreEditError, apply_detail, apply_photos, current_photos, load_detail_source,
-    photos_changed, preview_detail, validate_photos,
+    DetailSource, PhotoEntry, StoreEditError, apply_detail, apply_photos, available_templates, current_photos,
+    delete_user_template, load_detail_source, mappings_using_template, photos_changed, preview_detail, template_info,
+    validate_photos,
 )
+from services import detail_page
 from ui.messages import describe_error
 from ui.theme import set_role
 from ui.workers import run_async
@@ -58,9 +60,20 @@ class DetailTab(QWidget):
         self.apply_btn.clicked.connect(self.on_apply)
         self.reload_btn = QPushButton("다시 불러오기")
         self.reload_btn.clicked.connect(self.load)
+        self.delete_btn = set_role(QPushButton("템플릿 삭제"), "danger")
+        self.delete_btn.setToolTip("상세템플릿 폴더에 직접 넣은 템플릿만 지울 수 있습니다 (앱 기본 템플릿은 지울 수 없음).")
+        self.delete_btn.clicked.connect(self.on_delete_template)
+        self.folder_btn = QPushButton("템플릿 폴더 열기")
+        self.folder_btn.clicked.connect(self.on_open_folder)
+        self.template_combo.currentIndexChanged.connect(lambda _: self._update_delete_button())
 
+        template_row = QHBoxLayout()
+        template_row.addWidget(self.template_combo)
+        template_row.addWidget(self.delete_btn)
+        template_row.addWidget(self.folder_btn)
+        template_row.addStretch(1)
         form = QFormLayout()
-        form.addRow("템플릿", self.template_combo)
+        form.addRow("템플릿", template_row)
         buttons = QHBoxLayout()
         buttons.addWidget(self.preview_btn)
         buttons.addWidget(self.reload_btn)
@@ -82,9 +95,33 @@ class DetailTab(QWidget):
         self._set_enabled(False)
 
     def _set_enabled(self, ready: bool) -> None:
-        for w in (self.template_combo, self.preview_btn, self.apply_btn):
+        for w in (self.template_combo, self.preview_btn, self.apply_btn, self.folder_btn):
             w.setEnabled(ready and not self._loading)
         self.reload_btn.setEnabled(not self._loading)
+        self._update_delete_button()
+
+    def current_template(self) -> str:
+        return self.template_combo.currentData() or ""
+
+    def _update_delete_button(self) -> None:
+        ok = bool(self.source and not self._loading and self.template_combo.isEnabled() and self.current_template())
+        self.delete_btn.setEnabled(ok and template_info(self.source.settings, self.current_template()).deletable)
+
+    def _fill_templates(self, select: str) -> None:
+        """앱 기본 템플릿은 '(앱 기본)'으로 표시한다. 항목 데이터는 템플릿 이름."""
+        settings = self.source.settings
+        self.source.templates = available_templates(settings)
+        self.template_combo.blockSignals(True)
+        self.template_combo.clear()
+        for name in self.source.templates:
+            info = template_info(settings, name)
+            label = name if info.user_file else f"{name}  (앱 기본)"
+            self.template_combo.addItem(label, name)
+        index = self.template_combo.findData(select)
+        self.template_combo.setCurrentIndex(index if index >= 0 else max(0, self.template_combo.findData(
+            detail_page.DEFAULT_TEMPLATE)))
+        self.template_combo.blockSignals(False)
+        self._update_delete_button()
 
     def ensure_loaded(self) -> None:
         if self.source is None and not self._loading:
@@ -100,9 +137,7 @@ class DetailTab(QWidget):
     def _on_loaded(self, source: DetailSource) -> None:
         self._loading = False
         self.source = source
-        self.template_combo.clear()
-        self.template_combo.addItems(source.templates)
-        self.template_combo.setCurrentIndex(max(0, self.template_combo.findText(source.current_template)))
+        self._fill_templates(source.current_template)
         images = source.prepared.images
         counts = (f"상품 사진 {1 + len(images.optional)}장 · 상세 사진 {len(images.detail)}장"
                   if images and images.found else "사진 없음")
@@ -119,7 +154,7 @@ class DetailTab(QWidget):
         if not self.source:
             return
         try:
-            path = preview_detail(self.source, self.template_combo.currentText())
+            path = preview_detail(self.source, self.current_template())
         except Exception as e:
             QMessageBox.warning(self, "미리보기", _message(e))
             return
@@ -129,7 +164,7 @@ class DetailTab(QWidget):
     def on_apply(self) -> None:
         if not self.source:
             return
-        template = self.template_combo.currentText()
+        template = self.current_template()
         if QMessageBox.question(
                 self, "상세페이지 적용",
                 f"상세페이지를 '{template}' 템플릿으로 다시 만들어 스토어에 바로 반영합니다.\n"
@@ -141,6 +176,41 @@ class DetailTab(QWidget):
         services, no, source = self.services, self.origin_product_no, self.source
         run_async(lambda: apply_detail(services, no, source, template),
                   lambda raw: self._on_applied(raw, template), self._on_apply_failed)
+
+    def on_open_folder(self) -> None:
+        if not self.source:
+            return
+        folder = Path(detail_page.user_template_dir(self.source.settings))
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def on_delete_template(self) -> None:
+        if not self.source:
+            return
+        name = self.current_template()
+        info = template_info(self.source.settings, name)
+        if not info.deletable:
+            return
+        lines = [f"'{name}' 템플릿을 삭제할까요?", "",
+                 f"파일은 상세템플릿 폴더 안 '삭제한_템플릿' 폴더로 옮겨져 필요하면 되살릴 수 있습니다."]
+        if info.builtin:
+            lines.append(f"같은 이름의 앱 기본 템플릿 '{name}'이(가) 다시 쓰입니다.")
+        used = mappings_using_template(self.services.db, name)
+        if used:
+            lines += ["", f"⚠ 이 템플릿을 쓰는 분류: {', '.join(used)}"]
+            if not info.builtin:
+                lines.append("이 분류의 새 상품은 자동화 설정에서 다른 템플릿을 고르기 전까지 등록되지 않습니다.")
+        if name == self.source.current_template:
+            lines += ["", "이미 스토어에 올라간 상세페이지는 그대로입니다."]
+        if QMessageBox.question(self, "템플릿 삭제", "\n".join(lines)) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            moved = delete_user_template(self.source.settings, name)
+        except Exception as e:
+            QMessageBox.warning(self, "템플릿 삭제", _message(e))
+            return
+        self._fill_templates(name if info.builtin else self.source.current_template)
+        self.status.setText(f"'{name}' 템플릿을 삭제했습니다 (옮긴 곳: {moved})")
 
     def _on_applied(self, raw: dict, template: str) -> None:
         self._loading = False

@@ -228,8 +228,19 @@ def test_edit_dialog_tabs(env, monkeypatch, tmp_path):
     dialog.tabs.setCurrentIndex(1)                                   # 탭을 열면 불러옴
     assert not dialog.save_button.isEnabled()
     detail = dialog.detail_tab
-    assert detail.source and detail.template_combo.currentText() == "기본" and "A001" in detail.info.text()
-    detail.template_combo.setCurrentText("심플")
+    assert detail.source and detail.current_template() == "기본" and "A001" in detail.info.text()
+    assert detail.template_combo.currentText() == "기본  (앱 기본)" and not detail.delete_btn.isEnabled()
+
+    folder = load_settings(db).work_excel_path().parent / detail_page.USER_TEMPLATE_DIR   # 직접 만든 템플릿 삭제
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "지울것.html").write_text("<div>{{ p.name }}</div>", encoding="utf-8")
+    detail._fill_templates("지울것")
+    assert detail.template_combo.currentText() == "지울것" and detail.delete_btn.isEnabled()
+    detail.on_delete_template()
+    assert detail.template_combo.findData("지울것") < 0 and (folder / "삭제한_템플릿").is_dir()
+    assert detail.current_template() == "기본"
+
+    detail.template_combo.setCurrentIndex(detail.template_combo.findData("심플"))
     detail.on_apply()
     assert len(client.puts) == 1 and dialog.saved_actions == ["상세페이지 → 심플"]
     assert dialog.edit.raw["originProduct"]["detailContent"] == client.puts[0]["originProduct"]["detailContent"]
@@ -254,3 +265,73 @@ def test_edit_dialog_tabs(env, monkeypatch, tmp_path):
     assert dialog.save_button.isEnabled()
     dialog._close()
     assert dialog.result() == 1 and len(dialog.saved_actions) == 2   # 반영한 게 있으면 목록 새로 고침
+
+
+def test_apply_detail_uploads_images_written_in_user_template(env):
+    """사용자 템플릿에 넣은 images/... 사진도 올려서 네이버 주소로 보낸다 (그대로 보내면 InvalidImageUrl)."""
+    db, _, excel = env
+    setup_item(env)
+    folder = excel.parent / detail_page.USER_TEMPLATE_DIR
+    (folder / "images").mkdir(parents=True)
+    Image.new("RGB", (20, 20)).save(folder / "images" / "model.jpg")
+    (folder / "룩북.html").write_text('<div>{{ p.name }}<img src="images/model.jpg"></div>', encoding="utf-8")
+    (folder / "깨짐.html").write_text('<img src="images/none.jpg">', encoding="utf-8")
+    client = StoreClient(store_raw())
+    source = store_edit.load_detail_source(db, NO, store_raw())
+    assert "룩북" in source.templates
+
+    with pytest.raises(StoreEditError, match="none.jpg"):
+        store_edit.apply_detail(Services(db, client), NO, source, "깨짐")
+    assert not client.puts and not list(store_edit.backup_dir().glob("*.html"))   # 올리기 전에 멈춤
+
+    store_edit.apply_detail(Services(db, client), NO, source, "룩북")
+    content = client.puts[0]["originProduct"]["detailContent"]
+    assert '"images/' not in content and re.search(r'<img src="https://shop-phinf/new[^"]*"', content)
+
+
+def test_apply_detail_refuses_template_with_style_block(env):
+    """<style>로 꾸민 템플릿은 스토어에서 글자만 남으므로 올리기 전에 막는다 (백업·업로드·수정 없음)."""
+    db, _, excel = env
+    setup_item(env)
+    folder = excel.parent / detail_page.USER_TEMPLATE_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "스타일.html").write_text('<style>.a{color:red}</style><div class="a">{{ p.name }}</div>', encoding="utf-8")
+    client = StoreClient(store_raw())
+    source = store_edit.load_detail_source(db, NO, store_raw())
+    with pytest.raises(StoreEditError, match="style"):
+        store_edit.apply_detail(Services(db, client), NO, source, "스타일")
+    assert not client.puts and not list(store_edit.backup_dir().glob("*.html"))
+
+
+def test_delete_user_template_moves_file_and_keeps_builtins(env):
+    db, _, excel = env
+    settings = load_settings(db)
+    folder = excel.parent / detail_page.USER_TEMPLATE_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "내꺼.html").write_text("<div>{{ p.name }}</div>", encoding="utf-8")
+    (folder / "기본.html").write_text("<div>내 기본</div>", encoding="utf-8")   # 내장 '기본'을 덮어쓴 파일
+
+    assert not store_edit.template_info(settings, "심플").deletable          # 앱 내장
+    with pytest.raises(StoreEditError, match="지울 수 없습니다"):
+        store_edit.delete_user_template(settings, "심플")
+
+    moved = store_edit.delete_user_template(settings, "내꺼")
+    assert not (folder / "내꺼.html").exists() and moved.parent.name == "삭제한_템플릿"
+    assert moved.read_text(encoding="utf-8") == "<div>{{ p.name }}</div>"     # 지우지 않고 옮김 (되살릴 수 있음)
+    assert "내꺼" not in store_edit.available_templates(settings)
+    assert "삭제한_템플릿" not in str(store_edit.available_templates(settings))
+
+    info = store_edit.template_info(settings, "기본")
+    assert info.deletable and info.builtin
+    store_edit.delete_user_template(settings, "기본")
+    assert "기본" in store_edit.available_templates(settings)                  # 내장 '기본'으로 돌아감
+    assert not store_edit.template_info(settings, "기본").deletable
+
+
+def test_mappings_using_template(env):
+    from services.automation.config import CategoryMapping, save_mappings
+    db, _, _ = env
+    save_mappings(db, [CategoryMapping(name="니트", category_id="1", detail_template="에디토리얼"),
+                       CategoryMapping(name="후드", category_id="2", detail_template="기본")])
+    assert store_edit.mappings_using_template(db, "에디토리얼") == ["니트"]
+    assert store_edit.mappings_using_template(db, "없음") == []

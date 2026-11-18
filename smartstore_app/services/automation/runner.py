@@ -409,13 +409,22 @@ def _register_one(services, p: PreparedItem, report: RunReport, store: StoreCode
     if errors:
         return ItemResult(STATUS_FAILED, message="; ".join(errors))
 
-    # 상세페이지: 사진을 한 번만 올리고, 올린 주소로 HTML을 만든다 (상품 이미지도 같은 주소 재사용)
+    # 상세페이지: 사진을 올리기 전에 템플릿부터 확인한다 (사진 파일, 스토어가 지우는 <style>·<script>)
     notice = detail_page.notice_image_path(settings)
+    try:
+        local = detail_page.build_context(d, p.item, p.images, p.measurements, detail_page.local_src, notice,
+                                          detail_page.notice_text(settings))
+        detail_page.check_for_store(detail_page.render(settings, p.detail_template, local), p.detail_template)
+    except (detail_page.TemplateImageError, detail_page.TemplateStyleError) as e:
+        return ItemResult(STATUS_FAILED, message=f"상세페이지: {e}")
+    # 사진을 한 번만 올리고, 올린 주소로 HTML을 만든다 (상품 이미지도 같은 주소 재사용)
     to_upload = [str(x) for x in detail_page.page_images(p.images, notice)]
-    uploaded = dict(zip(to_upload, ImageApi(services.client()).upload(to_upload)))
+    image_api = ImageApi(services.client())
+    uploaded = dict(zip(to_upload, image_api.upload(to_upload)))
     context = detail_page.build_context(d, p.item, p.images, p.measurements, lambda path: uploaded[str(path)], notice,
                                         detail_page.notice_text(settings))
-    d.detail_html = detail_page.render(settings, p.detail_template, context)
+    # 템플릿에 직접 넣은 사진(템플릿 폴더 기준 상대 경로)도 올려서 네이버 주소로 바꾼다
+    d.detail_html = detail_page.render(settings, p.detail_template, context, image_urls=image_api.upload)
     detail_page.save_registered(code, d.detail_html, d.name)
 
     db.upsert_automation_item(code, STATUS_PROCESSING, message="등록 중", excel_synced=False)
@@ -562,8 +571,11 @@ def _write_preview(p: PreparedItem, settings) -> None:
     try:
         context = detail_page.build_context(p.draft, p.item, p.images, p.measurements, detail_page.local_src,
                                             detail_page.notice_image_path(settings), detail_page.notice_text(settings))
-        p.preview = detail_page.write_preview(p.code, detail_page.render(settings, p.detail_template, context),
-                                              p.draft.name)
+        html = detail_page.render(settings, p.detail_template, context)
+        p.preview = detail_page.write_preview(p.code, html, p.draft.name)
+        if detail_page.store_removed_parts(html):
+            p.warnings.append(f"상세 템플릿 '{p.detail_template}'은(는) 스토어가 지우는 <style>·<script>를 써서 "
+                              "등록할 수 없습니다. 인라인 스타일 템플릿을 고르세요.")
     except Exception as e:  # 템플릿 문법 오류 등
         p.warnings.append(f"상세페이지 미리보기를 만들지 못했습니다: {e}")
 

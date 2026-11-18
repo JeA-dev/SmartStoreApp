@@ -228,3 +228,57 @@ def test_detail_photos_in_card_section(tmp_path):
         assert "border-radius:18px" in tag and "border:1px solid" in tag
     ctx["detail_photos"] = []
     assert "DETAIL CUT" not in detail_page.render(settings, "기본", ctx)
+
+
+def test_template_images_are_resolved_from_template_folder(tmp_path):
+    """템플릿에 직접 넣은 사진(템플릿 파일 기준 상대 경로)은 미리보기에선 PC 주소, 등록 땐 올린 주소로 바꾼다."""
+    settings = AutomationSettings(work_excel=str(tmp_path / "상품입력.xlsx"))
+    folder = detail_page.user_template_dir(settings)
+    (folder / "images").mkdir(parents=True)
+    for name in ("모델 컷.jpg", "bg.png"):
+        Image.new("RGB", (10, 10)).save(folder / "images" / name)
+    (folder / "룩북.html").write_text(
+        '<style>.hero{background:url("images/bg.png")}</style>'
+        '<img src="images/%EB%AA%A8%EB%8D%B8%20%EC%BB%B7.jpg"><button data-img="images/모델 컷.jpg"></button>'
+        '<img src="https://cdn.example.com/a.jpg"><img src="{{ p.photos[0] }}">', encoding="utf-8")
+    ctx = detail_page.build_context(draft(), item(), None, None, str)
+    ctx["photos"] = ["https://img/01.jpg"]
+
+    preview = detail_page.render(settings, "룩북", ctx)
+    assert 'src="file:///' in preview and 'url("file:///' in preview and '"images/' not in preview
+
+    calls = []
+    def upload(paths):
+        calls.append([p.name for p in paths])
+        return [f"https://shop-phinf/{i}" for i in range(len(paths))]
+    html = detail_page.render(settings, "룩북", ctx, image_urls=upload)
+    assert calls == [["모델 컷.jpg", "bg.png"]]                       # 같은 파일은 한 번만
+    assert html.count("https://shop-phinf/0") == 2 and 'url("https://shop-phinf/1")' in html
+    assert "https://cdn.example.com/a.jpg" in html and "https://img/01.jpg" in html   # 인터넷 주소는 그대로
+
+    (folder / "없음.html").write_text('<img src="images/없는사진.jpg">', encoding="utf-8")
+    with pytest.raises(detail_page.TemplateImageError, match="없는사진.jpg"):
+        detail_page.render(settings, "없음", ctx)
+    Image.new("RGB", (10, 10)).save(folder / "images" / "a.webp")
+    (folder / "웹피.html").write_text('<img src="images/a.webp">', encoding="utf-8")
+    with pytest.raises(detail_page.TemplateImageError, match="JPG"):
+        detail_page.render(settings, "웹피", ctx)
+
+
+def test_store_removes_style_and_script_so_preview_matches(tmp_path):
+    """스토어는 <style>·<script>·<link>를 지운다 → 미리보기도 똑같이 빼고 경고, 등록·적용은 막는다."""
+    page = ('<link rel="stylesheet" href="a.css"><style>.t{color:red}</style>'
+            '<div class="t" style="color:#111">제목</div><script>alert(1)</script>')
+    assert detail_page.store_removed_parts(page) == ["<style> (CSS 블록)", "<script> (스크립트)", "<link> (외부 CSS)"]
+    assert detail_page.store_view(page) == '<div class="t" style="color:#111">제목</div>'
+    with pytest.raises(detail_page.TemplateStyleError, match="인라인"):
+        detail_page.check_for_store(page, "퀸")
+    preview = detail_page.write_preview("X1", page, "제목").read_text(encoding="utf-8")
+    assert "<style>.t" not in preview and "alert(1)" not in preview and "스토어에 적용할 수 없습니다" in preview
+
+    inline = '<div style="color:#111">제목</div>'
+    detail_page.check_for_store(inline)                      # 인라인 스타일만이면 통과
+    assert "적용할 수 없습니다" not in detail_page.write_preview("X2", inline, "제목").read_text(encoding="utf-8")
+    for name in ("기본", "심플", "이미지만"):                   # 내장 템플릿은 모두 스토어에 그대로 남는다
+        source = (detail_page.builtin_template_dir() / f"{name}.html").read_text(encoding="utf-8")
+        assert not detail_page.store_removed_parts(source), name
