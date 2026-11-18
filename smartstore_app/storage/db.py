@@ -285,6 +285,13 @@ class Database:
                  None if ai_draft is None else int(ai_draft), int(registered), ai_draft),
             )
 
+    def automation_code_for(self, origin_product_no: int) -> str | None:
+        """네이버 원상품번호로 자동화 상품코드를 찾는다 (삭제된 기록은 제외)."""
+        with self._lock:
+            row = self._conn.execute("SELECT code FROM automation_items WHERE origin_product_no = ? AND status != ? "
+                                     "ORDER BY updated_at DESC LIMIT 1", (origin_product_no, "삭제됨")).fetchone()
+        return row["code"] if row else None
+
     def automation_items_by_status(self, status: str) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute("SELECT * FROM automation_items WHERE status = ? ORDER BY registered_at DESC, "

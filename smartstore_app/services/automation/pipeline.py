@@ -102,7 +102,8 @@ def basic_detail_html(item: InputItem, name: str) -> str:
     return "\n".join(parts)
 
 
-def prepare(item: InputItem, ctx: Context) -> PreparedItem:
+def prepare(item: InputItem, ctx: Context, allow_registered: bool = False) -> PreparedItem:
+    """allow_registered=True: 이미 등록한 상품의 상세페이지를 다시 만들 때 — '이미 등록된 상품코드' 검사를 건너뛴다."""
     p = PreparedItem(item)
     errors, warnings = p.errors, p.warnings
 
@@ -119,7 +120,7 @@ def prepare(item: InputItem, ctx: Context) -> PreparedItem:
     if item.code:
         if ctx.code_counts[item.code] > 1:
             errors.append(f"엑셀에 상품코드 {item.code}가 {ctx.code_counts[item.code]}번 있습니다.")
-        record = ctx.db.get_automation_item(item.code)
+        record = None if allow_registered else ctx.db.get_automation_item(item.code)
         if record and record["status"] in (STATUS_REGISTERED, STATUS_ON_SALE) and record["origin_product_no"]:
             errors.append(f"이미 등록된 상품코드입니다 (네이버 상품번호 {record['origin_product_no']}).")
 

@@ -1,11 +1,15 @@
-"""상품 수정 대화상자 — 상품명, 판매가, 재고(또는 옵션별 추가금액·재고·사용), 판매/전시 상태."""
+"""상품 수정 대화상자.
+
+기본 정보 탭: 상품명, 판매가, 재고(또는 옵션별 추가금액·재고·사용), 판매/전시 상태 → '저장'
+상세페이지 탭: 상세 템플릿 바꿔 다시 만들기 / 사진 탭: 대표·추가 사진 바꾸기 → 각 탭의 '스토어에 적용'
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QLineEdit, QMessageBox, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from services.connection import AppServices
@@ -13,6 +17,7 @@ from services.product_manager import (
     DISPLAY_LABELS, EDITABLE_STATUSES, NAME_MAX, STATUS_LABELS, ProductEdit, save_edit, validate_edit,
 )
 from ui.messages import describe_error
+from ui.store_edit_tabs import DetailTab, PhotoTab
 from ui.theme import set_role
 from ui.workers import run_async
 
@@ -75,29 +80,68 @@ class ProductEditDialog(QDialog):
             self.display_combo.setEnabled(False)
             self.status_combo.setToolTip("판매 시작은 검수 대기 목록의 '선택 상품 판매 시작' 버튼으로 합니다.")
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        basic = QWidget()
+        basic_layout = QVBoxLayout(basic)
+        basic_layout.addLayout(form)
 
         self.table: QTableWidget | None = None
         if edit.has_options:
             guide = QLabel("옵션별 수정 — <b>재고</b>·추가금액 칸을 클릭해 숫자를 넣으세요. 합계가 위 재고수량이 됩니다. "
                            "(옵션 추가·삭제는 스마트스토어센터에서)")
             guide.setWordWrap(True)
-            layout.addWidget(guide)
+            basic_layout.addWidget(guide)
             self.table = self._build_option_table()
             self.table.itemChanged.connect(self._update_stock_total)
-            layout.addWidget(self.table, 1)
+            basic_layout.addWidget(self.table, 1)
+        else:
+            basic_layout.addStretch(1)
 
+        # 상세페이지·사진 탭은 각자 '스토어에 적용' 버튼으로 바로 반영한다
+        self.detail_tab = DetailTab(services, edit.origin_product_no, edit.raw)
+        self.photo_tab = PhotoTab(services, edit.origin_product_no, edit.raw)
+        self.detail_tab.applied.connect(self._on_store_applied)
+        self.photo_tab.applied.connect(self._on_store_applied)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(basic, "기본 정보")
+        self.tabs.addTab(self.detail_tab, "상세페이지")
+        self.tabs.addTab(self.photo_tab, "사진")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs, 1)
         self.status = QLabel()
         layout.addWidget(self.status)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        set_role(self.buttons.button(QDialogButtonBox.StandardButton.Save), "primary").setText("저장")
-        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
+        self.save_button = set_role(self.buttons.button(QDialogButtonBox.StandardButton.Save), "primary")
+        self.save_button.setText("저장")
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("닫기")
         self.buttons.accepted.connect(self.on_save)
-        self.buttons.rejected.connect(self.reject)
+        self.buttons.rejected.connect(self._close)
         layout.addWidget(self.buttons)
+        self.resize(900, 680)
 
         self.saved_actions: list[str] = []
+
+    def _on_tab_changed(self, index: int) -> None:
+        """'저장'은 기본 정보 탭 전용 (다른 탭은 '스토어에 적용')."""
+        self.save_button.setEnabled(index == 0)
+        tab = self.tabs.widget(index)
+        if tab in (self.detail_tab, self.photo_tab):
+            tab.ensure_loaded()
+
+    def _on_store_applied(self, raw: dict, message: str) -> None:
+        """상세페이지·사진을 반영했으면 새로 조회한 원상품으로 바꿔 둔다 — 이후 '저장'이 옛 내용으로 되돌리지 않게."""
+        self.edit.raw = raw
+        self.detail_tab.raw = raw
+        self.photo_tab.raw = raw
+        self.saved_actions.append(message)
+        self.status.setText(f"스토어에 반영됨: {', '.join(self.saved_actions)}")
+
+    def _close(self) -> None:
+        if self.saved_actions:
+            self.accept()   # 이미 스토어에 반영한 것이 있으면 목록을 새로 고치게 한다
+        else:
+            self.reject()
 
     def _build_option_table(self) -> QTableWidget:
         names = self.edit.group_names
@@ -166,8 +210,8 @@ class ProductEditDialog(QDialog):
         run_async(lambda: save_edit(self.services, edit), self._on_saved, self._on_failed)
 
     def _on_saved(self, actions: list[str]) -> None:
-        self.saved_actions = actions
-        if not actions:
+        self.saved_actions += actions
+        if not self.saved_actions:
             QMessageBox.information(self, "상품 수정", "변경된 내용이 없습니다.")
         self.accept()
 
