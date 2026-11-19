@@ -88,6 +88,18 @@ class AutomationPage(QWidget):
         image_row.addWidget(self.image_edit, 1)
         image_row.addWidget(image_btn)
 
+        files = QGroupBox("작업 엑셀 · 사진 폴더")
+        files.setObjectName("keyGroup")   # 가장 중요한 칸: 초록 테두리 (style.qss)
+        f = QFormLayout(files)
+        f.addRow("작업 엑셀", excel_row)
+        f.addRow("사진 폴더", image_row)
+        f.addRow("", self.live_check)
+        files_hint = QLabel("사진 폴더 안에 상품코드 이름의 폴더(예: 사진 폴더\\L004\\원본)를 두면 그 상품 사진으로 씁니다. "
+                            "경로를 바꾼 뒤에는 아래 '설정 저장'을 누르세요.")
+        files_hint.setObjectName("hint")
+        files_hint.setWordWrap(True)
+        f.addRow(files_hint)
+
         common = QGroupBox("공통 설정")
         f = QFormLayout(common)
         f.addRow("판매 수수료율", self.fee_spin)
@@ -95,9 +107,6 @@ class AutomationPage(QWidget):
         f.addRow("판매가 끝자리", self.ending_spin)
         f.addRow("하루 최대 등록 수", self.daily_spin)
         f.addRow("상품명 금지어", self.banned_edit)
-        f.addRow("작업 엑셀", excel_row)
-        f.addRow("사진 폴더", image_row)
-        f.addRow("", self.live_check)
 
         # --- 판매가 계산 미리보기 ---
         self.calc_cost = QSpinBox()
@@ -149,6 +158,7 @@ class AutomationPage(QWidget):
         photo_hint.setObjectName("hint")
         photo_hint.setWordWrap(True)
         photo = QGroupBox("사진 보정")
+        photo.setObjectName("keyGroup")   # 중요한 칸: 초록 테두리 (style.qss)
         f = QFormLayout(photo)
         f.addRow("정사각형", self.square_combo)
         f.addRow("", self.enhance_check)
@@ -288,13 +298,15 @@ class AutomationPage(QWidget):
         bl.setContentsMargins(0, 0, 8, 8)
         top = QHBoxLayout()
         top.setSpacing(14)
-        # 두 열 높이가 비슷하도록: 왼쪽 = 공통·상세페이지, 오른쪽 = 판매가·사진·AI 초안
+        # 배치 순서: 왼쪽 ① 작업 엑셀·사진 폴더 ② 사진 보정 ③ 상세페이지 / 오른쪽 ④ 공통 설정 ⑤ 판매가 계산 미리보기 ⑥ AI 초안
         left = QVBoxLayout()
-        left.addWidget(common)
-        left.addWidget(page, 1)   # 오른쪽 열과 아래 끝을 맞춘다
+        left.addWidget(files)
+        left.addWidget(photo)
+        left.addWidget(page)
+        left.addStretch()
         right = QVBoxLayout()
+        right.addWidget(common)
         right.addWidget(calc)
-        right.addWidget(photo)
         right.addWidget(ai)
         right.addStretch()
         top.addLayout(left, 1)

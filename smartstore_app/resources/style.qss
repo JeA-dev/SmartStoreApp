@@ -87,6 +87,11 @@ QGroupBox * {
     font-size: 13px;
     font-weight: 400;
 }
+/* 중요한 칸 (자동화 등록의 작업 엑셀 · 사진 폴더, 사진 보정) — 초록 테두리로 눈에 띄게 */
+QGroupBox#keyGroup {
+    border: 2px solid #008040;
+    color: #008040;
+}
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
