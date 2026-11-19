@@ -107,7 +107,7 @@ def test_run_summary_format_and_limit():
     assert text.splitlines()[:2] == ["[스마트스토어] 11/02 10:00 자동 등록", "등록 1건 / 실패 1건 / 검수 대기 12건"]
     assert "하루 한도로 다음에 등록: 1건" in text and "실패: A005 사진이 없습니다." in text
 
-    many = fake_report([(f"B{i:03}", "실패", "분류 '아주아주긴분류이름'가 자동화 설정의 분류 매핑에 없습니다") for i in range(20)],
+    many = fake_report([(f"B{i:03}", "실패", "분류 '아주아주긴분류이름'가 자동화 등록의 분류 매핑에 없습니다") for i in range(20)],
                        excel_written=False)
     text = run_summary(many, 0, now)
     assert len(text) <= 200 and "외 17건" in text

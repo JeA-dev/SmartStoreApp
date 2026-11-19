@@ -128,7 +128,7 @@ def cmd_init_template(args, db: Database) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     names = list(load_mappings(db))
     write_template(out, names)
-    _out(f"양식을 만들었습니다: {out}  (분류 {len(names)}개: {', '.join(names) or '없음 — 자동화 설정에서 추가'})")
+    _out(f"양식을 만들었습니다: {out}  (분류 {len(names)}개: {', '.join(names) or '없음 — 자동화 등록에서 추가'})")
     return 0
 
 
@@ -265,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="작업 엑셀의 대기 상품 등록 (기본: 판매중지로 등록)")
     run.add_argument("--dry-run", action="store_true", help="API 호출 없이 검증·미리보기만")
-    run.add_argument("--excel", help="작업 엑셀 경로 (기본: 자동화 설정의 경로)")
+    run.add_argument("--excel", help="작업 엑셀 경로 (기본: 자동화 등록의 경로)")
     run.add_argument("--codes", help="특정 상품코드만 (쉼표 구분)")
     run.add_argument("--notify", action="store_true", help="끝나면 카카오톡 알림 (예약 실행에서 사용)")
 
@@ -283,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export", help="등록용 PowerShell 스크립트(.ps1) 저장 경로")
 
     init = sub.add_parser("init-template", help="작업 엑셀 양식 만들기")
-    init.add_argument("--out", help="저장 경로 (기본: 자동화 설정의 작업 엑셀 경로)")
+    init.add_argument("--out", help="저장 경로 (기본: 자동화 등록의 작업 엑셀 경로)")
     init.add_argument("--force", action="store_true", help="이미 있으면 덮어쓰기")
 
     log = sub.add_parser("log", help="최근 실행 내역")

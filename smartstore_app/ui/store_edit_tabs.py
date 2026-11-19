@@ -11,14 +11,14 @@ from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QListView, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QListWidgetItem, QMenu, QMessageBox, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from services.images import MAX_PRODUCT_IMAGES, SOURCE_EXTENSIONS
 from services.store_edit import (
     DetailSource, PhotoEntry, StoreEditError, apply_detail, apply_photos, available_templates, current_photos,
-    delete_user_template, load_detail_source, mappings_using_template, photos_changed, preview_detail, template_info,
-    validate_photos,
+    delete_user_template, load_detail_source, mappings_using_template, page_photos_changed, photos_changed,
+    preview_detail, set_page_photos, template_info, validate_photos,
 )
 from services import detail_page
 from ui.messages import describe_error
@@ -26,6 +26,13 @@ from ui.theme import set_role
 from ui.workers import run_async
 
 _THUMB = 110
+# 상세페이지 사진 자리: (종류, 탭 이름, 안내). 에디토리얼 템플릿 기준 위치.
+PAGE_GROUPS = (
+    ("photos", "상품 사진", "첫 장은 대표 사진, 두 번째는 커버(맨 위 큰 사진)로 쓰입니다."),
+    ("cuts", "착용 컷", "'이 옷의 포인트' 위에 한 장씩 크게 들어갑니다."),
+    ("views", "디테일 컷", "'자세히 보기'에 두 장씩 들어갑니다. (처음엔 상품 사진 3번째부터)"),
+    ("pages", "긴 상세 이미지", "공지·사이즈표까지 든 완성된 긴 이미지. 템플릿 설정에 따라 넣거나 뺍니다 (에디토리얼은 기본으로 뺌)."),
+)
 _FILTER = "사진 (" + " ".join(f"*{e}" for e in sorted(SOURCE_EXTENSIONS)) + ")"
 
 
@@ -74,6 +81,45 @@ class DetailTab(QWidget):
         template_row.addStretch(1)
         form = QFormLayout()
         form.addRow("템플릿", template_row)
+        # 상세페이지에 넣을 사진 (이번 적용에만 쓰고 사진 폴더는 그대로) — 자리마다 탭 하나
+        self.page_lists: dict[str, PagePhotoList] = {}
+        self.photo_tabs = QTabWidget()
+        for kind, title, hint in PAGE_GROUPS:
+            lst = PagePhotoList(kind)
+            lst.model().rowsInserted.connect(self._update_photo_tab_titles)
+            lst.model().rowsRemoved.connect(self._update_photo_tab_titles)
+            self.page_lists[kind] = lst
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(6, 6, 6, 6)
+            page_layout.addWidget(_hint(hint))
+            page_layout.addWidget(lst, 1)
+            self.photo_tabs.addTab(page, title)
+        self.photo_add_btn = QPushButton("사진 추가...")
+        self.photo_left_btn = QPushButton("◀ 앞으로")
+        self.photo_right_btn = QPushButton("뒤로 ▶")
+        self.photo_remove_btn = QPushButton("빼기")
+        self.photo_move_btn = QPushButton("다른 탭으로 옮기기")
+        self.photo_move_btn.setToolTip("고른 사진을 다른 자리(탭)로 옮깁니다.")
+        self.photo_move_menu = QMenu(self.photo_move_btn)
+        for kind, title, _ in PAGE_GROUPS:
+            self.photo_move_menu.addAction(title, lambda kind=kind: self.move_page_photos(kind))
+        self.photo_move_btn.setMenu(self.photo_move_menu)
+        self.photo_reset_btn = QPushButton("원래대로")
+        self.photo_add_btn.clicked.connect(self.on_add_page_photos)
+        self.photo_left_btn.clicked.connect(lambda: self.active_list().move_selected(step=-1))
+        self.photo_right_btn.clicked.connect(lambda: self.active_list().move_selected(step=1))
+        self.photo_remove_btn.clicked.connect(lambda: self.active_list().take_selected())
+        self.photo_reset_btn.clicked.connect(self.reset_page_photos)
+        self._photo_widgets = (self.photo_tabs, self.photo_add_btn, self.photo_left_btn, self.photo_right_btn,
+                               self.photo_remove_btn, self.photo_move_btn, self.photo_reset_btn)
+        photo_tools = QHBoxLayout()
+        for b in (self.photo_add_btn, self.photo_left_btn, self.photo_right_btn, self.photo_remove_btn,
+                  self.photo_move_btn):
+            photo_tools.addWidget(b)
+        photo_tools.addStretch(1)
+        photo_tools.addWidget(self.photo_reset_btn)
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.preview_btn)
         buttons.addWidget(self.reload_btn)
@@ -86,16 +132,20 @@ class DetailTab(QWidget):
         layout.addWidget(self.info)
         layout.addLayout(form)
         layout.addWidget(_hint(
-            "상세페이지는 작업 엑셀의 설명·실측·소재와 사진 폴더의 사진으로 다시 만들고, 상품명·판매가는 지금 스토어 값을 씁니다. "
-            "'스토어에 적용'을 누르면 상세설명만 바뀌고, 바꾸기 전 상세페이지는 데이터 폴더의 '상품수정_백업'에 남습니다. "
-            "직접 만든 템플릿은 작업 엑셀 폴더의 '상세템플릿' 폴더에 넣으면 목록에 나옵니다."))
+            "작업 엑셀의 설명·실측·소재와 아래 사진으로 상세페이지를 다시 만들고, 상품명·판매가는 지금 스토어 값을 씁니다. "
+            "'스토어에 적용'을 누르면 상세설명만 바뀌고, 바꾸기 전 상세페이지는 데이터 폴더의 '상품수정_백업'에 남습니다."))
+        layout.addWidget(QLabel("<b>상세페이지에 넣을 사진</b>"))
+        layout.addWidget(_hint(
+            "끌어서 순서를 바꾸고, 탐색기에서 끌어다 놓거나 '사진 추가'로 넣습니다. 이번 적용에만 쓰며 사진 폴더와 "
+            "스토어 상품 사진(사진 탭)은 바뀌지 않습니다."))
+        layout.addLayout(photo_tools)
+        layout.addWidget(self.photo_tabs, 1)
         layout.addWidget(self.status)
-        layout.addStretch(1)
         layout.addLayout(buttons)
         self._set_enabled(False)
 
     def _set_enabled(self, ready: bool) -> None:
-        for w in (self.template_combo, self.preview_btn, self.apply_btn, self.folder_btn):
+        for w in (self.template_combo, self.preview_btn, self.apply_btn, self.folder_btn, *self._photo_widgets):
             w.setEnabled(ready and not self._loading)
         self.reload_btn.setEnabled(not self._loading)
         self._update_delete_button()
@@ -138,6 +188,7 @@ class DetailTab(QWidget):
         self._loading = False
         self.source = source
         self._fill_templates(source.current_template)
+        self.reset_page_photos()
         images = source.prepared.images
         counts = (f"상품 사진 {1 + len(images.optional)}장 · 상세 사진 {len(images.detail)}장"
                   if images and images.found else "사진 없음")
@@ -150,9 +201,50 @@ class DetailTab(QWidget):
         self.info.setText(_message(exc))
         self._set_enabled(False)
 
+    # --- 상세페이지 사진 ---
+    def active_list(self) -> "PagePhotoList":
+        return self.page_lists[PAGE_GROUPS[max(0, self.photo_tabs.currentIndex())][0]]
+
+    def _update_photo_tab_titles(self, *_args) -> None:
+        for i, (kind, title, _) in enumerate(PAGE_GROUPS):
+            self.photo_tabs.setTabText(i, f"{title} ({self.page_lists[kind].count()})")
+
+    def reset_page_photos(self) -> None:
+        if not self.source:
+            return
+        folder = self.source.folder_page()
+        known = list(self.source.folder_files())
+        for kind, _, _ in PAGE_GROUPS:
+            self.page_lists[kind].set_paths(getattr(folder, kind), known)
+        set_page_photos(self.source, None)
+        self._update_photo_tab_titles()
+
+    def on_add_page_photos(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(self, "상세페이지 사진 추가", "", _FILTER)
+        rejected = self.active_list().add_files([Path(f) for f in files])
+        if rejected:
+            QMessageBox.information(self, "사진 추가", f"{len(rejected)}장은 사진 파일이 아니라 넣지 못했습니다.")
+
+    def move_page_photos(self, kind: str) -> None:
+        """고른 사진을 다른 자리(탭)로 옮긴다."""
+        source_list, target = self.active_list(), self.page_lists[kind]
+        if target is source_list:
+            return
+        for entry in source_list.take_selected():
+            target.add_entry(entry)
+        target.relabel()
+
+    def page_photos(self) -> detail_page.PagePhotos:
+        return detail_page.PagePhotos(*(self.page_lists[kind].paths() for kind, _, _ in PAGE_GROUPS))
+
+    def _sync_page_photos(self) -> None:
+        """화면의 사진 구성을 상세페이지 만들기에 넘긴다 (사진 폴더 기본 구성과 같으면 폴더 그대로)."""
+        set_page_photos(self.source, self.page_photos())
+
     def on_preview(self) -> None:
         if not self.source:
             return
+        self._sync_page_photos()
         try:
             path = preview_detail(self.source, self.current_template())
         except Exception as e:
@@ -165,9 +257,12 @@ class DetailTab(QWidget):
         if not self.source:
             return
         template = self.current_template()
+        self._sync_page_photos()
+        counts = " · ".join(f"{title} {self.page_lists[kind].count()}장" for kind, title, _ in PAGE_GROUPS)
+        photos_note = f"\n사진(바꾼 구성): {counts}" if page_photos_changed(self.source) else ""
         if QMessageBox.question(
                 self, "상세페이지 적용",
-                f"상세페이지를 '{template}' 템플릿으로 다시 만들어 스토어에 바로 반영합니다.\n"
+                f"상세페이지를 '{template}' 템플릿으로 다시 만들어 스토어에 바로 반영합니다.{photos_note}\n"
                 "판매중인 상품이면 고객에게 바로 보입니다. 계속할까요?") != QMessageBox.StandardButton.Yes:
             return
         self._loading = True
@@ -199,7 +294,7 @@ class DetailTab(QWidget):
         if used:
             lines += ["", f"⚠ 이 템플릿을 쓰는 분류: {', '.join(used)}"]
             if not info.builtin:
-                lines.append("이 분류의 새 상품은 자동화 설정에서 다른 템플릿을 고르기 전까지 등록되지 않습니다.")
+                lines.append("이 분류의 새 상품은 자동화 등록에서 다른 템플릿을 고르기 전까지 등록되지 않습니다.")
         if name == self.source.current_template:
             lines += ["", "이미 스토어에 올라간 상세페이지는 그대로입니다."]
         if QMessageBox.question(self, "템플릿 삭제", "\n".join(lines)) != QMessageBox.StandardButton.Yes:
@@ -469,3 +564,60 @@ class PhotoTab(QWidget):
         self._set_busy(False)
         self.status.setText("적용 실패")
         QMessageBox.critical(self, "사진 적용 실패", _message(exc))
+
+
+# --- 상세페이지에 넣을 사진 ---
+class PagePhotoList(StorePhotoList):
+    """상세페이지에 넣을 PC 사진 목록 (kind: PAGE_GROUPS의 종류).
+
+    사진 폴더에 없는 사진은 '새 사진'으로 표시한다. 장수 제한은 없다 (스토어 상품 사진과 별개).
+    """
+
+    def __init__(self, kind: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.known: set[str] = set()
+        self.setMinimumHeight(_THUMB + 34)
+        self.setGridSize(QSize(_THUMB + 70, _THUMB + 14))
+
+    def set_paths(self, paths: list[Path], known: list[Path]) -> None:
+        self.clear()
+        self.known = {str(p) for p in known}
+        for path in paths:
+            self.add_entry(PhotoEntry(path=str(path)))
+        self.relabel()
+
+    def paths(self) -> list[Path]:
+        return [Path(e.path) for e in self.entries()]
+
+    def add_files(self, paths: list[Path]) -> list[Path]:
+        rejected = []
+        for path in paths:
+            if path.suffix.lower() not in SOURCE_EXTENSIONS or not path.is_file():
+                rejected.append(path)
+                continue
+            self.add_entry(PhotoEntry(path=str(path)))
+        self.relabel()
+        return rejected
+
+    def take_selected(self) -> list[PhotoEntry]:
+        entries = []
+        for item in sorted(self.selectedItems(), key=self.row):
+            entries.append(item.data(Qt.ItemDataRole.UserRole))
+            self.takeItem(self.row(item))
+        self.relabel()
+        return entries
+
+    def relabel(self, *_args) -> None:
+        for i in range(self.count()):
+            entry: PhotoEntry = self.item(i).data(Qt.ItemDataRole.UserRole)
+            if not entry:
+                continue
+            if self.kind == "photos":
+                label = ("대표", "커버")[i] if i < 2 else f"사진 {i + 1}"
+            else:
+                label = f"{_LIST_LABELS[self.kind]} {i + 1}"
+            self.item(i).setText(label + ("" if entry.path in self.known else " · 새 사진"))
+
+
+_LIST_LABELS = {"cuts": "착용", "views": "디테일", "pages": "긴 이미지"}

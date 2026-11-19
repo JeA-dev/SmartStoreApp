@@ -127,7 +127,7 @@ def prepare(item: InputItem, ctx: Context, allow_registered: bool = False) -> Pr
     # 분류 매핑
     mapping = ctx.mappings.get(item.get("분류")) if item.get("분류") else None
     if item.get("분류") and mapping is None:
-        errors.append(f"분류 '{item.get('분류')}'가 자동화 설정의 분류 매핑에 없습니다.")
+        errors.append(f"분류 '{item.get('분류')}'가 자동화 등록의 분류 매핑에 없습니다.")
     category_name = ""
     if mapping:
         if not mapping.category_id:

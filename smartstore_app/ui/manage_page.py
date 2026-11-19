@@ -1,8 +1,8 @@
 """상품 관리 — 스토어 상품 목록 조회, 수정, 판매 상태 일괄 변경."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from services.connection import AppServices
 from services.product_manager import (
     DISPLAY_LABELS, STATUS_LABELS, BulkResult, ProductEdit, ProductSummary, bulk_change_status, bulk_sold_out, fetch_all,
-    filter_products, load_edit,
+    filter_products, load_edit, product_web_urls,
 )
 from ui.messages import describe_error
 from ui.product_edit_dialog import ProductEditDialog
@@ -63,12 +63,15 @@ class ManagePage(QWidget):
         self.sale_btn = QPushButton("선택 상품 판매중으로")
         self.suspend_btn = QPushButton("선택 상품 판매중지로")
         self.soldout_btn = QPushButton("선택 상품 품절 처리")
+        self.web_btn = QPushButton("선택상품 웹으로 보기")
+        self.web_btn.setToolTip("고른 상품의 스마트스토어 페이지(손님이 보는 화면)를 브라우저로 엽니다.")
+        self.web_btn.clicked.connect(self.on_open_web)
         self.soldout_btn.clicked.connect(self.on_sold_out)
         self.edit_btn.clicked.connect(lambda: self.on_edit(self.table.currentRow()))
         self.sale_btn.clicked.connect(lambda: self.on_bulk_status("SALE"))
         self.suspend_btn.clicked.connect(lambda: self.on_bulk_status("SUSPENSION"))
         actions = QHBoxLayout()
-        for b in (self.edit_btn, self.sale_btn, self.suspend_btn, self.soldout_btn):
+        for b in (self.edit_btn, self.sale_btn, self.suspend_btn, self.soldout_btn, self.web_btn):
             actions.addWidget(b)
         actions.addStretch()
 
@@ -81,7 +84,7 @@ class ManagePage(QWidget):
         layout.addWidget(self.info)
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
-        for b in (self.load_btn, self.edit_btn, self.sale_btn, self.suspend_btn, self.soldout_btn):
+        for b in (self.load_btn, self.edit_btn, self.sale_btn, self.suspend_btn, self.soldout_btn, self.web_btn):
             b.setEnabled(not busy)
         if message:
             self.info.setText(message)
@@ -123,6 +126,34 @@ class ManagePage(QWidget):
     def _selected(self) -> list[ProductSummary]:
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
         return [self._shown[r] for r in rows if r < len(self._shown)]
+
+    # --- 웹으로 보기 ---
+    _WEB_CONFIRM = 5   # 이보다 많이 고르면 한 번 묻는다 (브라우저 탭이 한꺼번에 열리므로)
+
+    def on_open_web(self) -> None:
+        products = self._selected()
+        if not products:
+            QMessageBox.information(self, "웹으로 보기", "목록에서 상품을 고르세요. (Ctrl·Shift로 여러 개)")
+            return
+        if len(products) > self._WEB_CONFIRM and QMessageBox.question(
+                self, "웹으로 보기", f"상품 {len(products)}개의 페이지를 브라우저 탭으로 엽니다. 계속할까요?")                 != QMessageBox.StandardButton.Yes:
+            return
+        not_on_sale = [p for p in products if p.status != "SALE"]
+        self._set_busy(True, "스토어 주소를 확인하는 중...")
+        run_async(lambda: product_web_urls(self.services, products),
+                  lambda result: self._open_web(result, not_on_sale), self._on_error)
+
+    def _open_web(self, result: tuple[list[str], list[str]], not_on_sale: list[ProductSummary]) -> None:
+        self._set_busy(False)
+        urls, skipped = result
+        for url in urls:
+            QDesktopServices.openUrl(QUrl(url))
+        notes = [f"상품 페이지 {len(urls)}개를 브라우저로 열었습니다."]
+        if not_on_sale:
+            notes.append(f"판매중이 아닌 상품 {len(not_on_sale)}개는 손님 화면에서 '판매중지' 등으로 보이거나 열리지 않을 수 있습니다.")
+        if skipped:
+            notes.append(f"채널상품번호가 없어 열지 못함: {', '.join(skipped)}")
+        self.info.setText(" ".join(notes))
 
     # --- 수정 ---
     def on_edit(self, row: int) -> None:

@@ -54,6 +54,28 @@ class ProductSummary:
         )
 
 
+def store_url(services: AppServices) -> str:
+    """내 스마트스토어 주소 (예: https://smartstore.naver.com/luminarko). 판매자 채널 정보 API로 한 번 받아 둔다."""
+    cached = getattr(services, "_store_url", "")
+    if cached:
+        return cached
+    channels = services.client().get("/external/v1/seller/channels") or []
+    urls = [c.get("url") for c in channels if c.get("channelType") == "STOREFARM" and c.get("url")] or \
+        [c.get("url") for c in channels if c.get("url")]
+    if not urls:
+        raise ValueError("스마트스토어 주소를 찾지 못했습니다. 스마트스토어센터에서 스토어 주소가 정해져 있는지 확인하세요.")
+    services._store_url = urls[0].rstrip("/")
+    return services._store_url
+
+
+def product_web_urls(services: AppServices, products: list[ProductSummary]) -> tuple[list[str], list[str]]:
+    """손님이 보는 상품 페이지 주소들. (주소 목록, 채널상품번호가 없어 뺀 상품명 목록)."""
+    base = store_url(services)
+    urls = [f"{base}/products/{p.channel_product_no}" for p in products if p.channel_product_no]
+    skipped = [p.name or str(p.origin_product_no) for p in products if not p.channel_product_no]
+    return urls, skipped
+
+
 def fetch_all(services: AppServices) -> list[ProductSummary]:
     """스토어의 상품을 모두 불러온다(최근 등록순). 상품 수가 많지 않은 스토어 기준으로 전체를 받아 화면에서 거른다."""
     api = ProductApi(services.client())

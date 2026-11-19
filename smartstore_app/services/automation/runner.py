@@ -253,7 +253,7 @@ def make_drafts(db, codes: list[str] | None = None, force: bool = False,
     codes가 없으면 '대기' 상품 중 상품명(최종)·설명(최종)이 빈 상품. force면 보관된 초안을 버리고 새로 만든다.
     """
     if not ai_draft.has_api_key():
-        raise ValueError("Claude API 키가 없습니다. 자동화 설정에서 키를 저장하세요.")
+        raise ValueError("Claude API 키가 없습니다. 자동화 등록에서 키를 저장하세요.")
     with RunLock(lock_path(), "draft"):
         settings = load_settings(db)
         excel = settings.work_excel_path()
@@ -323,7 +323,7 @@ def _ai_step(services, settings, item, report: RunReport, dry_run: bool) -> tupl
     draft = ai_draft.load(db, item.code)
     if draft is None:
         if not ai_draft.has_api_key():
-            report.ai_note = "Claude API 키가 없어 AI 초안을 건너뛰었습니다. (자동화 설정에서 키를 저장하면 사용)"
+            report.ai_note = "Claude API 키가 없어 AI 초안을 건너뛰었습니다. (자동화 등록에서 키를 저장하면 사용)"
             return {}, []
         if dry_run:
             return {}, ["AI 초안은 실제 실행 때 만듭니다. (dry-run은 Claude API를 부르지 않음)"]

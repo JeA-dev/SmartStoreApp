@@ -208,3 +208,51 @@ def test_restock_sold_out_sends_status_once(db):
     puts = [c for c in client.calls if c[0] == "PUT"]
     assert len(puts) == 1 and puts[0][2]["originProduct"]["statusType"] == "SALE"   # 상태 변경 요청을 따로 안 보냄
     assert any("판매중" in d for d in done)
+
+
+class ChannelClient:
+    def __init__(self, channels):
+        self.channels, self.calls = channels, 0
+
+    def get(self, path, params=None):
+        assert path == "/external/v1/seller/channels"
+        self.calls += 1
+        return self.channels
+
+
+def test_product_web_urls_use_store_address_from_api(db):
+    from services.product_manager import product_web_urls, store_url
+    client = ChannelClient([{"channelNo": 1, "channelType": "WINDOW", "url": "https://shopping.naver.com/x"},
+                            {"channelNo": 2, "channelType": "STOREFARM", "name": "Luminar",
+                             "url": "https://smartstore.naver.com/luminarko/"}])
+    services = FakeServices(client, db)
+    items = [ProductSummary.from_search(search_item(100, "니트")), ProductSummary(7, None, "번호없음", "SALE", "ON",
+                                                                                0, 0, "", "")]
+    urls, skipped = product_web_urls(services, items)
+    assert urls == ["https://smartstore.naver.com/luminarko/products/101"] and skipped == ["번호없음"]
+    assert store_url(services) == "https://smartstore.naver.com/luminarko" and client.calls == 1   # 한 번만 조회
+    with pytest.raises(ValueError, match="주소를 찾지"):
+        store_url(FakeServices(ChannelClient([]), db))
+
+
+def test_manage_page_open_web_button(db, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtGui import QDesktopServices
+    from ui import manage_page
+    app = QApplication.instance() or QApplication([])  # noqa: F841
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()) or True)
+    monkeypatch.setattr(manage_page, "run_async", lambda fn, done, fail: done(fn()))
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    client = ChannelClient([{"channelType": "STOREFARM", "url": "https://smartstore.naver.com/luminarko"}])
+    page = manage_page.ManagePage(FakeServices(client, db))
+    assert page.web_btn.text() == "선택상품 웹으로 보기"
+    page.on_open_web()                                                    # 아무것도 안 고름
+    assert opened == []
+    page._on_loaded([ProductSummary.from_search(search_item(100, "니트")),
+                     ProductSummary.from_search(search_item(200, "후드", status="OUTOFSTOCK"))])
+    page.table.selectAll()
+    page.on_open_web()
+    assert opened == ["https://smartstore.naver.com/luminarko/products/101",
+                      "https://smartstore.naver.com/luminarko/products/201"]
+    assert "판매중이 아닌 상품 1개" in page.info.text()

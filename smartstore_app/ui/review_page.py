@@ -134,7 +134,7 @@ class ReviewPage(QWidget):
                 self.table.setItem(r, c, cell)
         self.table.blockSignals(False)
         self.info.setText(f"검수 대기 {len(self._items)}건 — 자동화로 판매중지 상태로 등록한 상품입니다."
-                          if self._items else "검수 대기 상품이 없습니다. (자동화 설정 → 대기 상품 처리로 등록)")
+                          if self._items else "검수 대기 상품이 없습니다. (자동화 등록 → 대기 상품 처리로 등록)")
         self._update_buttons()
 
     def _checked_codes(self) -> list[str]:

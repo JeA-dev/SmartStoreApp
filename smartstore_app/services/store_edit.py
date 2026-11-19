@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image
+
 from api.images import ImageApi
 from api.products import ProductApi
 from services import detail_page
@@ -119,10 +121,68 @@ class DetailSource:
     settings: AutomationSettings
     templates: list[str]
     warnings: list[str] = field(default_factory=list)
+    # 상세페이지에 넣을 사진을 화면에서 바꿨을 때 (None이면 사진 폴더 그대로). 이번 적용에만 쓰고 사진 폴더는 그대로 둔다.
+    page: detail_page.PagePhotos | None = None
+    _converted: dict = field(default_factory=dict, repr=False)   # 새로 고른 사진 → 맞춘 복사본
 
     @property
     def current_template(self) -> str:
         return self.prepared.detail_template or detail_page.DEFAULT_TEMPLATE
+
+    def folder_page(self) -> detail_page.PagePhotos:
+        """사진 폴더 기준 기본 구성."""
+        return detail_page.default_page_photos(self.prepared.images)
+
+    def folder_files(self) -> set[Path]:
+        images = self.prepared.images
+        return {images.representative, *images.optional, *images.detail} if images and images.found else set()
+
+
+PAGE_PHOTO_MAX_WIDTH = 1000   # 새로 고른 상세페이지 사진은 가로 1000px 이하 JPEG로 맞춘다 (비율 유지)
+
+
+def set_page_photos(source: DetailSource, page: detail_page.PagePhotos | None) -> None:
+    """상세페이지에 넣을 사진 구성을 정한다. None이거나 사진 폴더 기본 구성과 같으면 사진 폴더 그대로."""
+    if page is not None:
+        page = detail_page.PagePhotos(*([Path(x) for x in group]
+                                        for group in (page.photos, page.cuts, page.views, page.pages)))
+    source.page = None if page is None or page == source.folder_page() else page
+
+
+def page_photos_changed(source: DetailSource) -> bool:
+    return source.page is not None
+
+
+def _page_photo(source: DetailSource, path: Path) -> Path:
+    """사진 폴더의 사진은 그대로, 새로 고른 사진은 데이터 폴더 '상세수정'에 JPEG 복사본을 만든다 (원본은 읽기만)."""
+    path = Path(path)
+    if path in source.folder_files():
+        return path
+    if path not in source._converted:
+        if not path.is_file():
+            raise StoreEditError(f"사진 파일이 없습니다: {path}")
+        if path.suffix.lower() not in SOURCE_EXTENSIONS:
+            raise StoreEditError(f"쓸 수 없는 사진 형식입니다: {path.name}")
+        img = load_image(path)
+        if img.width > PAGE_PHOTO_MAX_WIDTH:
+            img = img.resize((PAGE_PHOTO_MAX_WIDTH, round(img.height * PAGE_PHOTO_MAX_WIDTH / img.width)),
+                             Image.Resampling.LANCZOS)
+        out = app_data_dir() / "상세수정" / source.code
+        out.mkdir(parents=True, exist_ok=True)
+        target = out / f"{_stamp()}_{len(source._converted) + 1:02d}_{path.stem}.jpg"
+        save_jpeg(img, target, source.settings.image_options().max_bytes)
+        source._converted[path] = target
+    return source._converted[path]
+
+
+def resolved_page_photos(source: DetailSource) -> detail_page.PagePhotos | None:
+    """상세페이지에 실제로 넣을 사진 구성 (화면에서 바꾼 구성 반영, 새 사진은 맞춘 복사본). None이면 사진 폴더 그대로."""
+    if source.page is None:
+        return None
+    if not source.page.photos:
+        raise StoreEditError("상세페이지에 넣을 상품 사진(대표)이 1장 이상 있어야 합니다.")
+    return detail_page.PagePhotos(*([_page_photo(source, x) for x in group] for group in (
+        source.page.photos, source.page.cuts, source.page.views, source.page.pages)))
 
 
 def load_detail_source(db, origin_product_no: int, raw: dict) -> DetailSource:
@@ -154,22 +214,31 @@ def load_detail_source(db, origin_product_no: int, raw: dict) -> DetailSource:
     return DetailSource(code, p, settings, available_templates(settings), warnings)
 
 
-def _check_template(source: DetailSource, template: str) -> None:
+def _check_template(source: DetailSource, template: str, page: detail_page.PagePhotos | None) -> None:
     if not detail_page.template_exists(source.settings, template):
         raise StoreEditError(f"상세 템플릿 '{template}'이(가) 없습니다.")
     images = source.prepared.images
-    if template == detail_page.IMAGE_ONLY_TEMPLATE and not (images and images.detail):
-        raise StoreEditError(f"'{template}' 템플릿은 상세 이미지가 필요합니다. "
+    has_detail = bool(page.cuts or page.pages) if page is not None else bool(images and images.detail)
+    if template == detail_page.IMAGE_ONLY_TEMPLATE and not has_detail:
+        raise StoreEditError(f"'{template}' 템플릿은 상세 사진이 필요합니다. '착용 컷'이나 '긴 상세 이미지' 탭에 사진을 넣거나, "
                              f"파일명에 detail이 들어간 사진을 '{images.folder if images else '사진 폴더'}'에 넣으세요.")
 
 
-def render_detail(source: DetailSource, template: str, image_src, image_urls=detail_page.local_urls) -> str:
-    """image_src: 상품 사진 주소, image_urls: 템플릿에 직접 넣은 사진 주소 (기본은 PC 파일 — 미리보기용)."""
-    _check_template(source, template)
+_RESOLVE = object()
+
+
+def render_detail(source: DetailSource, template: str, image_src, image_urls=detail_page.local_urls,
+                  page=_RESOLVE) -> str:
+    """image_src: 상품 사진 주소, image_urls: 템플릿에 직접 넣은 사진 주소 (기본은 PC 파일 — 미리보기용).
+    page: 넣을 사진 구성 (생략하면 화면에서 바꾼 구성, None이면 사진 폴더 그대로)."""
+    if page is _RESOLVE:
+        page = resolved_page_photos(source)
+    _check_template(source, template, page)
     p = source.prepared
     settings = source.settings
     context = detail_page.build_context(p.draft, p.item, p.images, p.measurements, image_src,
-                                        detail_page.notice_image_path(settings), detail_page.notice_text(settings))
+                                        detail_page.notice_image_path(settings), detail_page.notice_text(settings),
+                                        page_photos=page)
     try:
         return detail_page.render(settings, template, context, image_urls=image_urls)
     except detail_page.TemplateImageError as e:
@@ -185,8 +254,9 @@ def preview_detail(source: DetailSource, template: str) -> Path:
 def apply_detail(services, origin_product_no: int, source: DetailSource, template: str) -> dict:
     """사진을 올리고 고른 템플릿으로 상세페이지를 만들어 스토어 상품의 상세설명만 바꾼다. 새로 조회한 원상품을 돌려준다."""
     # 올리기 전에 확인: 템플릿 사진 파일, 스토어가 지우는 <style>·<script> (지워지면 디자인 없이 글자만 보임)
+    page = resolved_page_photos(source)
     try:
-        detail_page.check_for_store(render_detail(source, template, detail_page.local_src), template)
+        detail_page.check_for_store(render_detail(source, template, detail_page.local_src, page=page), template)
     except detail_page.TemplateStyleError as e:
         raise StoreEditError(str(e)) from e
     api = ProductApi(services.client())
@@ -197,10 +267,10 @@ def apply_detail(services, origin_product_no: int, source: DetailSource, templat
 
     notice = detail_page.notice_image_path(source.settings)
     image_api = ImageApi(services.client())
-    to_upload = [str(x) for x in detail_page.page_images(source.prepared.images, notice)]
+    to_upload = [str(x) for x in detail_page.page_images(source.prepared.images, notice, page)]   # 같은 사진은 한 번만
     uploaded = dict(zip(to_upload, image_api.upload(to_upload))) if to_upload else {}
     # 템플릿에 직접 넣은 사진(템플릿 폴더 기준, 예: images/모델컷.jpg)도 올려서 네이버 주소로 바꾼다
-    html = render_detail(source, template, lambda path: uploaded[str(path)], image_api.upload)
+    html = render_detail(source, template, lambda path: uploaded[str(path)], image_api.upload, page=page)
 
     body = copy.deepcopy(raw)
     body["originProduct"]["detailContent"] = html

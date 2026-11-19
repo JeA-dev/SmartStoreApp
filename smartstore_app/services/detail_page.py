@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
 
 from jinja2 import ChoiceLoader, Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
+from PIL import Image
 
 from services.automation.config import AutomationSettings
 from services.automation.input_sheet import InputItem
@@ -94,13 +96,62 @@ def split_headline(name: str) -> tuple[str, str]:
     return " ".join(words[:cut]), " ".join(words[cut:])
 
 
+# 상세용 사진(파일명에 detail) 중 세로가 가로의 이 배수 이상이면 '완성된 상세 이미지'(공지·사이즈표까지 든 긴 이미지),
+# 그보다 짧으면 착용·디테일 '컷'으로 본다. (예: 860×2000 → 긴 이미지, 1000×1339 → 컷)
+LONG_IMAGE_RATIO = 1.6
+
+
+def is_long_image(path: Path) -> bool:
+    try:
+        with Image.open(path) as im:
+            width, height = im.size
+    except OSError:
+        return True    # 읽지 못하면 컷 자리에 끼워 넣지 않는다
+    return width > 0 and height / width >= LONG_IMAGE_RATIO
+
+
+@dataclass
+class PagePhotos:
+    """상세페이지에 넣을 사진 묶음 (상품 수정 창의 사진 탭과 같은 구성).
+
+    photos: 상품 사진 (첫 장 = 대표)          → p.photos
+    cuts:   착용 컷 (detail 이름, 보통 비율)   → p.detail_cuts
+    views:  디테일 컷 ('자세히 보기')          → p.detail_views
+    pages:  완성된 긴 상세 이미지              → p.detail_pages
+    """
+    photos: list[Path] = field(default_factory=list)
+    cuts: list[Path] = field(default_factory=list)
+    views: list[Path] = field(default_factory=list)
+    pages: list[Path] = field(default_factory=list)
+
+    def all(self) -> list[Path]:
+        """업로드할 사진 (같은 사진은 한 번만)."""
+        return list(dict.fromkeys([*self.photos, *self.cuts, *self.views, *self.pages]))
+
+
+def default_page_photos(images: ImageSet | None) -> PagePhotos:
+    """사진 폴더 기준 기본 구성: 디테일 컷은 상품 사진 3번째부터 (1·2번째는 대표·커버)."""
+    if not images or not images.found:
+        return PagePhotos()
+    photos = [images.representative, *images.optional]
+    return PagePhotos(photos=photos, cuts=[p for p in images.detail if not is_long_image(p)], views=photos[2:],
+                      pages=[p for p in images.detail if is_long_image(p)])
+
+
 def build_context(draft: ProductDraft, item: InputItem, images: ImageSet | None,
                   measurements: MeasurementsParsed | None, image_src: Callable[[Path], str],
-                  notice_image: Path | None = None, notice_text: tuple[str, str] = ("", "")) -> dict:
-    photos, detail_photos = [], []
-    if images and images.found:
-        photos = [image_src(p) for p in [images.representative, *images.optional]]
-        detail_photos = [image_src(p) for p in images.detail]
+                  notice_image: Path | None = None, notice_text: tuple[str, str] = ("", ""),
+                  page_photos: PagePhotos | None = None) -> dict:
+    """page_photos: 화면에서 바꾼 사진 구성 (없으면 사진 폴더 기준 기본 구성)."""
+    pp = page_photos if page_photos is not None else default_page_photos(images)
+    photos = [image_src(p) for p in pp.photos]
+    detail_cuts = [image_src(p) for p in pp.cuts]
+    detail_pages = [image_src(p) for p in pp.pages]
+    detail_views = [image_src(p) for p in pp.views]
+    if page_photos is None and images:
+        detail_photos = [image_src(p) for p in images.detail]          # 사진 폴더 순서 그대로
+    else:
+        detail_photos = detail_cuts + detail_pages
     lines = [line.strip() for line in item.get("설명(최종)").splitlines() if line.strip()]
     head, tail = split_headline(draft.name)
     return {
@@ -116,7 +167,10 @@ def build_context(draft: ProductDraft, item: InputItem, images: ImageSet | None,
         "description_lines": lines,
         "options": [(g.name, g.values) for g in draft.option_groups] if draft.use_options else [],
         "photos": photos,
-        "detail_photos": detail_photos,
+        "detail_photos": detail_photos,     # 상세용 사진 전부 (예전 템플릿 호환)
+        "detail_cuts": detail_cuts,         # 착용 컷 (detail 이름 중 보통 비율)
+        "detail_views": detail_views,       # 디테일 컷 ('자세히 보기', 기본은 상품 사진 3번째부터)
+        "detail_pages": detail_pages,       # 완성된 긴 상세 이미지
         "size_table": size_table(measurements),
         "material": item.get("소재"),
         "washing": item.get("세탁"),
@@ -203,12 +257,14 @@ def notice_text(settings: AutomationSettings) -> tuple[str, str]:
     return settings.notice_title, settings.notice_subtitle
 
 
-def page_images(images: ImageSet | None, notice: Path | None) -> list[Path]:
+def page_images(images: ImageSet | None, notice: Path | None, page_photos: PagePhotos | None = None) -> list[Path]:
     """상세페이지에 들어가는 사진 (업로드 대상)."""
     result = [notice] if notice else []
-    if images and images.found:
+    if page_photos is not None:
+        result += page_photos.all()
+    elif images and images.found:
         result += [images.representative, *images.optional, *images.detail]
-    return result
+    return list(dict.fromkeys(result))
 
 
 def preview_dir() -> Path:

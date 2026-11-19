@@ -282,3 +282,19 @@ def test_store_removes_style_and_script_so_preview_matches(tmp_path):
     for name in ("기본", "심플", "이미지만"):                   # 내장 템플릿은 모두 스토어에 그대로 남는다
         source = (detail_page.builtin_template_dir() / f"{name}.html").read_text(encoding="utf-8")
         assert not detail_page.store_removed_parts(source), name
+
+
+def test_detail_photos_split_into_cuts_and_long_pages(tmp_path):
+    """파일명에 detail이 든 사진 중 긴 이미지(세로 ≥ 가로×1.6)는 완성 상세 이미지, 나머지는 착용·디테일 컷."""
+    from services.images import ImageSet
+    sizes = {"01.jpg": (1000, 1000), "90_detail_cut.jpg": (1000, 1339), "90_detail_wide.jpg": (1000, 667),
+             "90_detail_page.jpg": (860, 2000)}
+    for name, size in sizes.items():
+        Image.new("RGB", size).save(tmp_path / name)
+    images = ImageSet(folder=tmp_path, representative=tmp_path / "01.jpg",
+                      detail=[tmp_path / n for n in ("90_detail_cut.jpg", "90_detail_page.jpg", "90_detail_wide.jpg")])
+    ctx = detail_page.build_context(draft(), item(), images, None, lambda p: Path(p).name)
+    assert ctx["detail_photos"] == ["90_detail_cut.jpg", "90_detail_page.jpg", "90_detail_wide.jpg"]
+    assert ctx["detail_cuts"] == ["90_detail_cut.jpg", "90_detail_wide.jpg"]
+    assert ctx["detail_pages"] == ["90_detail_page.jpg"]
+    assert detail_page.is_long_image(tmp_path / "없음.jpg")          # 못 읽으면 컷 자리에 넣지 않음

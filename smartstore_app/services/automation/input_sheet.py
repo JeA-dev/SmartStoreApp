@@ -35,7 +35,7 @@ COLUMNS = [
     ("원가", True, "공급가·매입가 (원)", 9),
     ("옵션", False, "예: 색상:베이지,블랙 / 사이즈:S,M,L", 30),
     ("재고", True, "숫자(모든 조합 동일) 또는 베이지-S:3, 블랙-M:2", 20),
-    ("분류", True, "자동화 설정의 분류명 (드롭다운)", 12),
+    ("분류", True, "자동화 등록의 분류명 (드롭다운)", 12),
     ("브랜드", False, "비우면 분류 설정의 브랜드", 10),
     ("키워드", False, "비우면 분류 설정의 핵심키워드", 14),
     ("이미지URL", False, "도매몰 이미지 주소. 여러 개는 | 로 구분. 사진 폴더에 넣었으면 비워도 됨", 30),
@@ -125,7 +125,7 @@ def write_template(path: str | Path, category_names: list[str]) -> None:
              " 파일명에 detail이 들어간 사진은 상세페이지용입니다."),
         ("", "• 도매몰 상품은 '이미지URL'에 주소를 적으면 등록할 때 사진 폴더로 내려받습니다."),
         ("", "• 상품명(최종)·설명(최종)을 직접 적으면 자동화가 절대 바꾸지 않습니다."),
-        ("", "• 분류 목록을 바꿨다면 앱의 자동화 설정에서 '양식 만들기'로 새 양식을 받으세요."),
+        ("", "• 분류 목록을 바꿨다면 앱의 자동화 등록에서 '양식 만들기'로 새 양식을 받으세요."),
         ("", ""),
         ("항목 설명", ""),
     ] + [(name, ("[필수] " if required else "") + desc) for name, required, desc, _ in COLUMNS]
@@ -147,7 +147,7 @@ def _text(v) -> str:
 def read_items(path: str | Path) -> list[InputItem]:
     path = Path(path)
     if not path.is_file():
-        raise FileNotFoundError(f"작업 엑셀이 없습니다: {path}\n자동화 설정에서 '양식 만들기'로 만들 수 있습니다.")
+        raise FileNotFoundError(f"작업 엑셀이 없습니다: {path}\n자동화 등록에서 '양식 만들기'로 만들 수 있습니다.")
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         if SHEET not in wb.sheetnames:

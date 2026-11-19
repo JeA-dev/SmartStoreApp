@@ -108,7 +108,7 @@ class AiDraftDialog(QDialog):
         splitter.addWidget(self.codes)
         splitter.addWidget(detail)
         splitter.setStretchFactor(1, 1)
-        self.empty = QLabel("보관된 AI 초안이 없습니다. 자동화 설정 → 'AI 초안 (Claude)'에서 만들거나, "
+        self.empty = QLabel("보관된 AI 초안이 없습니다. 자동화 등록 → 'AI 초안 (Claude)'에서 만들거나, "
                             "대기 상품 처리 때 빈 상품명·설명이 있으면 자동으로 만들어집니다.")
         self.empty.setObjectName("hint")
         self.empty.setWordWrap(True)

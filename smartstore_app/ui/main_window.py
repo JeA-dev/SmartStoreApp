@@ -92,14 +92,15 @@ class MainWindow(QMainWindow):
         self.nav.setIconSize(QSize(18, 18))
         self.pages = QStackedWidget()
         self._index: dict[QWidget, int] = {}
+        # 핵심 기능(자동화 등록 → 상품 관리)을 맨 위에 둔다. 앱을 열면 첫 화면은 자동화 등록.
         pages = [
+            ("automation", "자동화 등록", "작업 엑셀의 대기 상품을 사진 보정·상세페이지까지 만들어 자동으로 등록합니다. "
+             "분류별 카테고리·마진·상품명 규칙과 공통 설정도 여기서 관리합니다.", self.automation_page),
+            ("manage", "상품 관리", "자동 등록한 상품을 검수해 판매를 시작하고, 스토어 상품의 가격·재고·상태를 수정합니다.",
+             manage_container),
             ("product", "상품 등록", "단일·옵션 상품을 입력해 스마트스토어에 등록합니다.", self.product_page),
             ("excel", "엑셀 일괄 등록", "엑셀 양식으로 여러 상품을 한 번에 등록합니다.", self.excel_page),
             ("drafts", "임시저장함", "작성 중에 저장한 상품을 불러오거나 삭제합니다.", self.drafts_page),
-            ("manage", "상품 관리", "자동 등록한 상품을 검수해 판매를 시작하고, 스토어 상품의 가격·재고·상태를 수정합니다.",
-             manage_container),
-            ("automation", "자동화 설정", "분류별 카테고리·마진·상품명 규칙과 자동 등록 공통 설정을 관리합니다.",
-             self.automation_page),
             ("camera", "촬영 사진", "QR 카드를 출력하고, 폰으로 찍은 사진을 상품별 폴더로 자동 분리합니다.",
              self.photo_inbox_page),
             ("bell", "예약 · 알림", "정한 시각에 자동 등록을 실행하고, 결과를 카카오톡으로 받습니다.", self.schedule_page),

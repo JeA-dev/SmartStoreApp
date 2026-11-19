@@ -133,7 +133,7 @@ def _client(api_key: str | None = None):
     import anthropic
     key = api_key or get_api_key()
     if not key:
-        raise AiDraftError("Claude API 키가 없습니다. 자동화 설정에서 키를 저장하세요.")
+        raise AiDraftError("Claude API 키가 없습니다. 자동화 등록에서 키를 저장하세요.")
     return anthropic.Anthropic(api_key=key, max_retries=3, timeout=180)
 
 
