@@ -10,7 +10,7 @@
 ![platform](https://img.shields.io/badge/platform-Windows-0078D6)
 ![python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/PySide6-Qt-41CD52?logo=qt&logoColor=white)
-![tests](https://img.shields.io/badge/tests-222%20passed-success)
+![tests](https://img.shields.io/badge/tests-229%20passed-success)
 
 [📦 실행 파일 받기](../../releases) · [📖 사용법](smartstore_app/사용법.md) · [🎤 발표 자료](docs/)
 
@@ -52,9 +52,9 @@ flowchart LR
 | **판매가 계산** | `원가 × (1 + 마진) ÷ (1 − 수수료)` → 올림 → 끝자리 정리(예: 18,900원) |
 | **사진** | QR 카드로 촬영 사진 자동 분리, HEIC 지원, 1000×1000 보정, 화이트밸런스, AI 배경 제거(BiRefNet) |
 | **AI 초안** | Claude가 사진을 보고 상품명·설명·검색 태그 후보 작성 — **비어 있는 칸만** 채움 |
-| **상세페이지** | Jinja2 HTML 템플릿(기본 · 심플 · 이미지만 + 직접 만든 템플릿), 미리보기 후 등록, 템플릿 속 사진 자동 업로드, 스토어가 지우는 `<style>`·`<script>` 검사 |
-| **상품 관리** | 스토어 상품 조회·필터, 가격·재고·옵션·판매 상태 수정, 일괄 상태 변경, 검수 대기 탭 |
-| **올린 상품 고치기** | 상품 수정 창에서 **상세페이지 템플릿 바꾸기** · **사진 순서·교체**, 바꾸기 전 내용 자동 백업, 템플릿 삭제 |
+| **상세페이지** | Jinja2 HTML 템플릿(기본 · 심플 · 이미지만 + 직접 만든 템플릿), 미리보기 후 등록, 사진을 자리별(상품 사진 · 착용 컷 · 디테일 컷 · 긴 상세 이미지)로 나눠 배치, 템플릿 속 사진 자동 업로드, 스토어가 지우는 `<style>`·`<script>` 검사 |
+| **상품 관리** | 스토어 상품 조회·필터, 가격·재고·옵션·판매 상태 수정, 일괄 상태 변경, 검수 대기 탭, **선택상품 웹으로 보기**(손님 화면 열기) |
+| **올린 상품 고치기** | 상품 수정 창에서 **상세페이지 템플릿 바꾸기** · **상세페이지 사진 고르기**(자리별 탭에서 순서·추가·빼기·옮기기) · **상품 사진 순서·교체**, 바꾸기 전 내용 자동 백업, 템플릿 삭제 |
 | **예약 · 알림** | Windows 작업 스케줄러로 정해진 시간에 자동 실행, 카카오톡 '나에게 보내기'로 결과 요약 |
 | **명령줄** | `SmartStoreCli.exe run · draft · publish · preview · sort-photos · schedule …` 로 화면 없이 실행 |
 
@@ -95,7 +95,7 @@ cd smartstore_app
 ```
 
 ```powershell
-..\.venv\Scripts\python -m pytest -q   # 테스트 222개 (실제 API·네트워크는 차단된 상태로 실행)
+..\.venv\Scripts\python -m pytest -q   # 테스트 229개 (실제 API·네트워크는 차단된 상태로 실행)
 build.bat                              # dist\SmartStoreApp\ 에 exe 빌드 (build.bat lite: 배경 제거 제외)
 ```
 
@@ -119,7 +119,7 @@ build.bat                              # dist\SmartStoreApp\ 에 exe 빌드 (bui
    ├─ storage/              SQLite DB · keyring 자격 증명
    ├─ ui/                   PySide6 화면
    ├─ resources/            스타일 · 상세 템플릿 · 입력 양식
-   └─ tests/                pytest 222개
+   └─ tests/                pytest 229개
 ```
 
 ## 🛠️ 기술 스택
@@ -136,6 +136,7 @@ build.bat                              # dist\SmartStoreApp\ 에 exe 빌드 (bui
 | **Day 2** (11/2) | 자동화 설계 프롬프트 작성, 9단계 순서대로 구현 — 엑셀 파이프라인 · 사진 보정 · 상세페이지 · 검수 · 알림 · QR · AI 초안 · 배포 |
 | **Day 3** (11/3) | 실제로 써 보며 기능 추가 · 버그 수정, 실제 상품 등록, 사용 가이드 작성 |
 | **Day 4** (11/18) | GitHub 공개 · 릴리즈, 올린 상품의 상세페이지 템플릿 · 사진 바꾸기, 템플릿 속 사진 업로드 · 스토어용 검사 · 템플릿 삭제 |
+| **Day 5** (11/19) | 상세페이지 사진을 자리별 탭으로 편집(착용 컷 · 디테일 컷 · 긴 이미지 자동 구분), 선택상품 웹으로 보기, 메뉴 정리('자동화 등록'을 첫 화면으로) · 자동화 등록 화면 재배치 |
 
 <div align="center">
 <sub>Built with <a href="https://claude.com/claude-code">Claude Code</a></sub>
